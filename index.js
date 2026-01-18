@@ -1,3 +1,6 @@
+// تعريف مكتبة التشفير بشكل عام لحل مشكلة ReferenceError
+global.crypto = require('crypto');
+
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -33,7 +36,7 @@ function clearSession() {
 }
 
 async function startBot() {
-    // جلب أحدث نسخة من واتساب ويب لتجنب مشاكل الاتصال
+    // جلب أحدث نسخة من واتساب ويب
     const { version } = await fetchLatestBaileysVersion();
     console.log(`نسخة واتساب المستخدمة: v${version.join('.')}`);
 
@@ -44,7 +47,7 @@ async function startBot() {
         logger: log,
         printQRInTerminal: true, // ضروري لظهور الباركود
         auth: state,
-        // استخدام متصفح Ubuntu ليكون أكثر توافقاً مع السيرفر
+        // استخدام متصفح Ubuntu لضمان التوافق
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false
     });
@@ -104,10 +107,14 @@ app.listen(SETTINGS.port, () => {
     console.log(`🌍 Server running on port ${SETTINGS.port}`);
     
     // في أول تشغيل، سنحذف الجلسة لضمان ظهور الباركود
-    // يمكنك إزالة هذا السطر لاحقاً إذا أردت الحفاظ على الاتصال عند إعادة التشغيل
     if (restartAttempts === 0) clearSession();
 
     startBot();
+});
+
+// منع توقف البوت عند الأخطاء المفاجئة
+process.on('uncaughtException', (err) => console.error("Uncaught Exception:", err));
+process.on('unhandledRejection', (err) => console.error("Unhandled Rejection:", err));
 });
 
 // منع توقف البوت عند الأخطاء المفاجئة
