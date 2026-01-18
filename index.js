@@ -1,4 +1,4 @@
-// تعريف مكتبة التشفير بشكل عام لحل مشكلة ReferenceError
+// تعريف مكتبة التشفير (مهم جداً)
 global.crypto = require('crypto');
 
 const {
@@ -6,11 +6,17 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     Browsers,
-    fetchLatestBaileysVersion
+    fetchLatestBaileysVersion,
+    delay
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const express = require('express');
+
+// =========================================================================
+// 🟢 تم وضع رقمك هنا
+const myPhoneNumber = "201066706529"; 
+// =========================================================================
 
 const SETTINGS = {
     botName: 'WhatsApp Bot',
@@ -23,62 +29,66 @@ const log = pino({ level: 'silent' });
 
 let restartAttempts = 0;
 
-// دالة لحذف الجلسة الفاسدة
 function clearSession() {
     try {
         if (fs.existsSync(AUTH_DIR)) {
             fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-            console.log("🗑️ تم حذف ملفات الجلسة القديمة لبدء اتصال نظيف.");
+            console.log("🗑️ تم تنظيف الجلسة القديمة.");
         }
-    } catch (e) {
-        console.error("خطأ في حذف الجلسة:", e);
-    }
+    } catch (e) {}
 }
 
 async function startBot() {
-    // جلب أحدث نسخة من واتساب ويب
     const { version } = await fetchLatestBaileysVersion();
-    console.log(`نسخة واتساب المستخدمة: v${version.join('.')}`);
-
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     const sock = makeWASocket({
         version,
         logger: log,
-        printQRInTerminal: true, // ضروري لظهور الباركود
+        printQRInTerminal: false, // ❌ إيقاف الباركود
+        mobile: false, 
         auth: state,
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false
     });
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    // كود طلب الربط (Pairing Code)
+    if (!sock.authState.creds.registered) {
+        
+        // ننتظر 4 ثواني للتأكد من الاتصال
+        setTimeout(async () => {
+            try {
+                const code = await sock.requestPairingCode(myPhoneNumber);
+                const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
+                
+                console.log("\n\n================================================");
+                console.log("📞 رمز الربط الخاص بك هو:  👉  " + formattedCode + "  👈");
+                console.log("================================================\n");
+                console.log("⚠️ اذهب لواتساب في هاتفك -> الأجهزة المرتبطة -> ربط جهاز -> (في الأسفل) الربط برقم الهاتف");
+                console.log("✍️ واكتب الرمز الظاهر في الأعلى.");
+                
+            } catch (err) {
+                console.error("❌ فشل طلب رمز الربط (تأكد أن الرقم صحيح ويعمل):", err);
+            }
+        }, 4000);
+    }
 
-        if (qr) {
-            console.log("⚠️ امسح الباركود بسرعة! (QR Code generated)");
-        }
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const reason = lastDisconnect.error?.output?.statusCode;
-            console.log(`❌ انقطع الاتصال. السبب: ${reason} | ${lastDisconnect.error}`);
+            console.log(`❌ انقطع الاتصال (${reason}). إعادة المحاولة...`);
 
             if (reason === DisconnectReason.loggedOut) {
-                console.log("🔒 تم تسجيل الخروج. جاري حذف الجلسة...");
-                clearSession();
-                startBot();
-            } else if (reason === DisconnectReason.badSession) {
-                console.log("📂 ملف الجلسة معطوب. جاري الحذف وإعادة التشغيل...");
+                console.log("🔒 تم تسجيل الخروج. جاري حذف الجلسة لطلب كود جديد...");
                 clearSession();
                 startBot();
             } else {
-                restartAttempts++;
-                const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
-                console.log(`🔄 إعادة المحاولة بعد ${waitSec} ثانية...`);
-                setTimeout(startBot, waitSec * 1000);
+                startBot();
             }
         } else if (connection === 'open') {
             console.log('✅ تم الاتصال بـ WhatsApp بنجاح! 🚀');
-            restartAttempts = 0;
         }
     });
 
@@ -89,27 +99,19 @@ async function startBot() {
             const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
 
             if (text === '.بنج') {
-                await sock.sendMessage(m.key.remoteJid, { text: '🚀 البوت شغال وسريع!' }, { quoted: m });
+                await sock.sendMessage(m.key.remoteJid, { text: '🚀 البوت يعمل بنجاح!' }, { quoted: m });
             }
-        } catch (err) {
-            console.error("خطأ في قراءة الرسالة:", err);
-        }
+        } catch (err) {}
     });
 
     sock.ev.on('creds.update', saveCreds);
 }
 
-// السيرفر
-app.get('/', (req, res) => res.send('Bot is Running'));
+app.get('/', (req, res) => res.send('Bot is Running with Pairing Code'));
+
 app.listen(SETTINGS.port, () => {
     console.log(`🌍 Server running on port ${SETTINGS.port}`);
-    
-    // حذف الجلسة عند أول تشغيل لضمان ظهور الباركود
-    if (restartAttempts === 0) clearSession();
-
+    // حذف الجلسة عند البداية فقط إذا لم نكن متصلين، لضمان طلب الكود
+    if (!fs.existsSync(AUTH_DIR)) clearSession();
     startBot();
 });
-
-// منع توقف البوت عند الأخطاء المفاجئة
-process.on('uncaughtException', (err) => console.error("Uncaught Exception:", err));
-process.on('unhandledRejection', (err) => console.error("Unhandled Rejection:", err));
