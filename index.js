@@ -1,6 +1,4 @@
-// تعريف مكتبة التشفير (مهم جداً)
 global.crypto = require('crypto');
-
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -14,7 +12,7 @@ const fs = require('fs');
 const express = require('express');
 
 // =========================================================================
-// 🟢 تم وضع رقمك هنا
+// رقمك المصري (تأكدنا منه)
 const myPhoneNumber = "201066706529"; 
 // =========================================================================
 
@@ -27,13 +25,12 @@ const AUTH_DIR = 'auth_info_baileys';
 const app = express();
 const log = pino({ level: 'silent' });
 
-let restartAttempts = 0;
-
+// دالة لحذف الجلسة القديمة دائماً لضمان كود جديد
 function clearSession() {
     try {
         if (fs.existsSync(AUTH_DIR)) {
             fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-            console.log("🗑️ تم تنظيف الجلسة القديمة.");
+            console.log("🗑️ تم تنظيف الجلسة القديمة لإنشاء كود جديد...");
         }
     } catch (e) {}
 }
@@ -45,32 +42,31 @@ async function startBot() {
     const sock = makeWASocket({
         version,
         logger: log,
-        printQRInTerminal: false, // ❌ إيقاف الباركود
+        printQRInTerminal: false,
         mobile: false, 
         auth: state,
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false
     });
 
-    // كود طلب الربط (Pairing Code)
     if (!sock.authState.creds.registered) {
         
-        // ننتظر 4 ثواني للتأكد من الاتصال
+        // مهلة 10 ثوانٍ لكي تفتح الـ Logs وتجهز هاتفك
+        console.log("⏳ جاري تجهيز كود الربط... جهز هاتفك الآن!");
         setTimeout(async () => {
             try {
                 const code = await sock.requestPairingCode(myPhoneNumber);
                 const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
                 
                 console.log("\n\n================================================");
-                console.log("📞 رمز الربط الخاص بك هو:  👉  " + formattedCode + "  👈");
+                console.log("📞 الكود الجديد هو:  👉  " + formattedCode + "  👈");
                 console.log("================================================\n");
-                console.log("⚠️ اذهب لواتساب في هاتفك -> الأجهزة المرتبطة -> ربط جهاز -> (في الأسفل) الربط برقم الهاتف");
-                console.log("✍️ واكتب الرمز الظاهر في الأعلى.");
+                console.log("⚡ اكتبه بسرعة في هاتفك قبل انتهاء صلاحيته!");
                 
             } catch (err) {
-                console.error("❌ فشل طلب رمز الربط (تأكد أن الرقم صحيح ويعمل):", err);
+                console.error("❌ حدث خطأ في طلب الكود:", err);
             }
-        }, 4000);
+        }, 10000); // 10 ثواني انتظار
     }
 
     sock.ev.on('connection.update', async (update) => {
@@ -78,10 +74,7 @@ async function startBot() {
 
         if (connection === 'close') {
             const reason = lastDisconnect.error?.output?.statusCode;
-            console.log(`❌ انقطع الاتصال (${reason}). إعادة المحاولة...`);
-
             if (reason === DisconnectReason.loggedOut) {
-                console.log("🔒 تم تسجيل الخروج. جاري حذف الجلسة لطلب كود جديد...");
                 clearSession();
                 startBot();
             } else {
@@ -97,9 +90,8 @@ async function startBot() {
             const m = messages[0];
             if (!m.message || m.key.fromMe) return;
             const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
-
             if (text === '.بنج') {
-                await sock.sendMessage(m.key.remoteJid, { text: '🚀 البوت يعمل بنجاح!' }, { quoted: m });
+                await sock.sendMessage(m.key.remoteJid, { text: '🚀 البوت يعمل!' }, { quoted: m });
             }
         } catch (err) {}
     });
@@ -107,7 +99,14 @@ async function startBot() {
     sock.ev.on('creds.update', saveCreds);
 }
 
-app.get('/', (req, res) => res.send('Bot is Running with Pairing Code'));
+app.get('/', (req, res) => res.send('Bot is Running'));
+
+app.listen(SETTINGS.port, () => {
+    console.log(`🌍 Server running on port ${SETTINGS.port}`);
+    // حذف الجلسة عند كل تشغيل لضمان ظهور الكود
+    clearSession();
+    startBot();
+});
 
 app.listen(SETTINGS.port, () => {
     console.log(`🌍 Server running on port ${SETTINGS.port}`);
