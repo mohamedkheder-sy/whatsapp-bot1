@@ -36,11 +36,4 @@ function clearSession() {
 }
 
 async function startBot() {
-    const { version } = await fetchLatestBaileysVersion();
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-
-    const sock = makeWASocket({
-        version,
-        logger: log,
-        printQRInTerminal: false,
-        mobile: false,
+    const { version } = await fetch
