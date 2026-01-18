@@ -1,6 +1,6 @@
 /**
- * بوت واتساب متكامل - إصدار مستقر
- * تم إضافة ميزة المنشن الجماعي (.منشن / .الكل)
+ * بوت واتساب متكامل - متوافق مع Replit و Koyeb
+ * يتضمن إصلاحات المنفذ (Port 5000) وعنوان السيرفر (0.0.0.0)
  */
 
 const { 
@@ -19,29 +19,25 @@ const crypto = require("crypto");
 global.crypto = crypto;
 
 const app = express();
-const port = process.env.PORT || 8000; 
+// التعديل الأول: استخدام منفذ 5000 كخيار افتراضي (مفضل في Replit)
+const port = process.env.PORT || 5000; 
 
-// إعدادات البوت
 const settings = {
-    phoneNumber: "201066706529", // رقمك
+    phoneNumber: "201066706529", 
     ownerName: "Mohamed Kheder",
     botName: "My Super Bot"
 };
 
 async function startBot() {
-    // جلب أحدث إصدار من المكتبة
-    const { version, isLatest } = await fetchLatestBaileysVersion();
-    console.log(`🚀 Version: ${version.join('.')} | Latest: ${isLatest}`);
-
-    // إعداد حفظ الجلسة
+    const { version } = await fetchLatestBaileysVersion();
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
         version,
-        logger: pino({ level: "silent" }), // تقليل الإزعاج في السجلات
+        logger: pino({ level: "silent" }), 
         printQRInTerminal: false, 
         mobile: false,
-        browser: ["Windows", "Chrome", "110.0.5481.178"], 
+        browser: ["Ubuntu", "Chrome", "20.0.04"], 
         auth: {
             creds: state.creds,
             keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
@@ -50,42 +46,35 @@ async function startBot() {
         keepAliveIntervalMs: 30000,
     });
 
-    // طلب كود الربط إذا لم يكن مسجلاً
     if (!sock.authState.creds.registered) {
-        console.log("⏳ Waiting 10 seconds for server stability...");
+        console.log("⏳ انتظر 10 ثواني لاستقرار السيرفر...");
         await delay(10000); 
         try {
             const code = await sock.requestPairingCode(settings.phoneNumber);
             console.log(`\n========================================`);
-            console.log(`🔥 YOUR PAIRING CODE: ${code}`);
-            console.log(`📱 Link your phone using this code now!`);
+            console.log(`🔥 كود الربط الخاص بك: ${code}`);
             console.log(`========================================\n`);
         } catch (err) {
-            console.error('❌ Failed to get pairing code:', err.message);
+            console.error('❌ فشل جلب الكود:', err.message);
         }
     }
 
-    // إدارة الاتصال
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         
         if (connection === 'close') {
             const reason = lastDisconnect?.error?.output?.statusCode;
-            console.log(`⚠️ Connection closed. Reason: ${reason}`);
-
             if (reason === DisconnectReason.loggedOut) {
-                console.log('❌ Logged out. Deleting session...');
                 fs.rmSync('./auth_info', { recursive: true, force: true });
                 startBot();
             } else {
                 startBot(); 
             }
         } else if (connection === 'open') {
-            console.log('✅ Connected successfully to WhatsApp!');
+            console.log('✅ تم الاتصال بـ WhatsApp بنجاح!');
         }
     });
 
-    // معالج الرسائل
     sock.ev.on('messages.upsert', async ({ messages }) => {
         try {
             const m = messages[0];
@@ -94,49 +83,36 @@ async function startBot() {
             const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
             const remoteJid = m.key.remoteJid;
 
-            // 1️⃣ أمر القائمة
+            // أوامر البوت
             if (text === '.اوامر' || text === '.menu') {
-                const menu = `🤖 *قائمة ${settings.botName}*\n\n1️⃣ .بنج\n2️⃣ .منشن (أو .الكل)\n3️⃣ .المطور\n\n👑 بواسطة: ${settings.ownerName}`;
-                await sock.sendMessage(remoteJid, { text: menu }, { quoted: m });
+                await sock.sendMessage(remoteJid, { text: 'القائمة:\n1. .بنج\n2. .منشن' }, { quoted: m });
             } 
-            // 2️⃣ أمر بنج
             else if (text === '.بنج') {
-                await sock.sendMessage(remoteJid, { text: '🚀 البوت يعمل بسرعة الصاروخ!' }, { quoted: m });
+                await sock.sendMessage(remoteJid, { text: '🚀 شغال!' }, { quoted: m });
             }
-            // 3️⃣ أمر المنشن الجماعي (الجديد)
             else if (text === '.منشن' || text === '.الكل') {
-                // التأكد أن الأمر داخل مجموعة
                 if (remoteJid.endsWith('@g.us')) {
                     const groupMetadata = await sock.groupMetadata(remoteJid);
                     const participants = groupMetadata.participants.map(p => p.id);
-                    
-                    const mentionText = '📣 *منشن جماعي للكل* 📣\n\n' + 
-                                      participants.map(p => `@${p.split('@')[0]}`).join(' ');
-
                     await sock.sendMessage(remoteJid, {
-                        text: mentionText,
+                        text: '📣 منشن للكل',
                         mentions: participants
                     }, { quoted: m });
-                } else {
-                    await sock.sendMessage(remoteJid, { text: '⚠️ هذا الأمر يعمل فقط داخل المجموعات!' }, { quoted: m });
                 }
             }
-
         } catch (err) {
-            console.error("Error processing message:", err);
+            console.error("Error:", err);
         }
     });
 
     sock.ev.on('creds.update', saveCreds);
 }
 
-// حماية السيرفر
-process.on('uncaughtException', (err) => console.error("Uncaught Exception:", err));
-process.on('unhandledRejection', (err) => console.error("Unhandled Rejection:", err));
-
 // تشغيل السيرفر
-app.get('/', (req, res) => res.send(`Bot is Running ✅`));
-app.listen(port, () => {
-    console.log(`Server is running on port ${port}`);
+app.get('/', (req, res) => res.send(`Bot Active ✅`));
+
+// التعديل الثاني والأهم: إضافة '0.0.0.0' لكي يرى Replit السيرفر
+app.listen(port, '0.0.0.0', () => {
+    console.log(`Server running on port ${port}`);
     startBot();
 });
