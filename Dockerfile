@@ -1,6 +1,6 @@
-FROM node:18-buster
+FROM node:18-bullseye
 
-# تثبيت المتطلبات الضرورية للنظام (مهمة لمكاتب مثل puppeteer و ffmpeg)
+# تثبيت المتطلبات الضرورية للنظام
 RUN apt-get update && \
   apt-get install -y \
   ffmpeg \
@@ -21,4 +21,3 @@ COPY . .
 
 # أمر تشغيل البوت
 CMD ["npm", "start"]
-
