@@ -1,213 +1,109 @@
-/**
- * AzharBot - Baileys based WhatsApp bot
- * Configure via .env (see .env.example)
- */
-
-require('dotenv').config();
-const { 
-  default: makeWASocket,
-  useMultiFileAuthState,
-  DisconnectReason,
-  makeCacheableSignalKeyStore,
-  delay,
-  fetchLatestBaileysVersion,
-  Browsers
-} = require("@whiskeysockets/baileys");
-const pino = require("pino");
-const express = require('express');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    Browsers,
+    makeInMemoryStore
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
 const fs = require('fs');
-const path = require('path');
+const express = require('express');
 
-const log = pino({ level: process.env.LOG_LEVEL || "info" });
-
-const app = express();
-const port = process.env.PORT || 8000;
-
+// إعدادات البوت والسيرفر
 const SETTINGS = {
-  phoneNumber: process.env.PHONE_NUMBER || "",
-  ownerName: process.env.OWNER_NAME || "Owner",
-  botName: process.env.BOT_NAME || "AzharBot",
-  printQRInTerminal: (process.env.PRINT_QR || "false") === "true",
-  requestPairingCode: (process.env.REQUEST_PAIRING_CODE || "false") === "true"
+    botName: 'WhatsApp Bot',
+    port: process.env.PORT || 3000
 };
 
-const AUTH_DIR = path.resolve('./auth_info');
+// إعداد ملف الجلسة
+const AUTH_DIR = 'auth_info_baileys';
+const app = express();
+const log = pino({ level: 'silent' }); // اجعلها 'info' لرؤية تفاصيل أكثر
+
 let restartAttempts = 0;
 
 async function startBot() {
-  try {
-    restartAttempts = 0;
-    const { version } = await fetchLatestBaileysVersion();
-    log.info(`Baileys protocol version: ${version.join('.')}`);
-
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     const sock = makeWASocket({
-      version,
-      logger: pino({ level: process.env.LOG_LEVEL || "silent" }),
-      printQRInTerminal: SETTINGS.printQRInTerminal,
-      browser: Browsers.macOS("Safari"),
-      auth: {
-        creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
-      },
-      connectTimeoutMs: 60000,
-      retryRequestDelayMs: 2000,
+        logger: log,
+        printQRInTerminal: true, // طباعة الباركود في التيرمينال
+        auth: state,
+        browser: Browsers.macOS('Desktop'),
+        syncFullHistory: false
     });
 
-    if (!sock.authState?.creds?.registered) {
-      await delay(1500);
-      if (SETTINGS.requestPairingCode && SETTINGS.phoneNumber) {
-        try {
-          const code = await sock.requestPairingCode(SETTINGS.phoneNumber);
-          log.info("========================================");
-          log.info(`Pairing CODE: ${code}`);
-          log.info("========================================");
-          log.info("افتح WhatsApp → Linked devices → Link a device واتبع التعليمات.");
-        } catch (err) {
-          log.warn("طلب pairing code فشل:", err?.message || err);
-          log.info("استخدام QR أو الجلسة المحفوظة auth_info.");
-        }
-      } else {
-        log.info("الجلسة غير مسجلة. لتظهر QR ضع PRINT_QR=true في .env أو فعّل pairing code.");
-      }
-    }
-
+    // التعامل مع تحديثات الاتصال
     sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect } = update;
-      if (connection === 'close') {
-        const code = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.reason || 'unknown';
-        log.warn("Connection closed:", code);
+        const { connection, lastDisconnect } = update;
 
-        const loggedOut = (lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) ||
-                          (lastDisconnect?.error?.message && lastDisconnect.error.message.includes('logged out'));
-
-        if (!loggedOut) {
-          restartAttempts++;
-          const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
-          log.info(`إعادة المحاولة بعد ${waitSec} ثانية (attempt ${restartAttempts})`);
-          setTimeout(() => startBot().catch(e => log.error(e)), waitSec * 1000);
-        } else {
-          log.error("Logged out — حذف auth_info مطلوب لإعادة الربط.");
-          try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) {}
+        if (connection === 'close') {
+            const shouldReconnect = (lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut);
+            
+            if (shouldReconnect) {
+                restartAttempts++;
+                // حساب وقت الانتظار بناءً على عدد المحاولات (لمنع التكرار السريع جداً)
+                const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
+                console.log(`❌ انقطع الاتصال. إعادة المحاولة بعد ${waitSec} ثانية...`);
+                
+                setTimeout(() => startBot().catch(e => console.error(e)), waitSec * 1000);
+            } else {
+                console.log("⚠️ تم تسجيل الخروج من الجهاز (Logged Out). يرجى مسح ملف الجلسة وإعادة مسح الباركود.");
+                try { 
+                    fs.rmSync(AUTH_DIR, { recursive: true, force: true }); 
+                } catch (e) {
+                    console.error("خطأ في حذف ملف الجلسة:", e);
+                }
+                // يمكن إيقاف العملية هنا أو إعادة التشغيل لانتظار مسح جديد
+                // process.exit(0); 
+            }
+        } else if (connection === 'open') {
+            console.log('✅ تم الاتصال بـ WhatsApp بنجاح!');
+            restartAttempts = 0; // تصفير العداد عند النجاح
         }
-      } else if (connection === 'open') {
-        log.info('✅ Connected successfully to WhatsApp!');
-      }
     });
 
+    // التعامل مع الرسائل القادمة
     sock.ev.on('messages.upsert', async ({ messages }) => {
-      try {
-        const m = messages[0];
-        if (!m.message || m.key.fromMe) return;
-        const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
-        log.info({ from: m.key.remoteJid, text }, "Incoming message");
-        if (text === '.بنج') {
-          await sock.sendMessage(m.key.remoteJid, { text: '🚀 شغال 100%!' }, { quoted: m });
-          log.info("Replied to .بنج");
+        try {
+            const m = messages[0];
+            if (!m.message || m.key.fromMe) return;
+
+            const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
+
+            // طباعة الرسالة في السجل (اختياري)
+            // console.log(`📩 رسالة من ${m.key.remoteJid}: ${text}`);
+
+            if (text === '.بنج') {
+                await sock.sendMessage(m.key.remoteJid, { text: '🚀 شغال 100%!' }, { quoted: m });
+            }
+        } catch (err) {
+            console.error("Error handling message:", err);
         }
-      } catch (err) {
-        log.error("Error handling message:", err);
-      }
     });
 
-    sock.ev.on('creds.update', saveCreds);
-    log.info("Bot started and listening for events.");
-    return sock;
-
-  } catch (err) {
-    log.error("Fatal startBot error:", err);
-    restartAttempts++;
-    const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
-    log.info(`إعادة محاولة startBot بعد ${waitSec} ثانية`);
-    setTimeout(() => startBot().catch(e => log.error(e)), waitSec * 1000);
-  }
-}
-
-app.get('/', (req, res) => {
-  res.send(`${SETTINGS.botName} active`);
-});
-
-app.listen(port, () => {
-  log.info(`HTTP server listening on port ${port}`);
-  startBot().catch(err => log.error("startBot initial error:", err));
-});
-
-process.on('uncaughtException', (err) => {
-  log.error("Uncaught Exception (ignored):", err);
-});
-process.on('unhandledRejection', (err) => {
-  log.error("Unhandled Rejection (ignored):", err);
-});          const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
-          log.info(`إعادة الاتصال بعد ${waitSec} ثانية (attempt ${restartAttempts})`);
-          restarting = true;
-          setTimeout(() => startBot().catch(e => log.error(e)), waitSec * 1000);
-        } else {
-          log.error("الحساب تم تسجيل خروجه (logged out). يتم حذف ��لجلسة auth_info.");
-          try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (e) {}
-        }
-      } else if (connection === 'open') {
-        log.info('✅ Connected successfully to WhatsApp!');
-      }
-    });
-
-    // simple message handler
-    sock.ev.on('messages.upsert', async ({ messages }) => {
-      try {
-        const m = messages[0];
-        if (!m.message || m.key.fromMe) return;
-
-        const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
-
-        log.info({ from: m.key.remoteJid, text }, "Incoming message");
-
-        if (text === '.بنج') {
-          await sock.sendMessage(m.key.remoteJid, { text: '🚀 شغال 100%!' }, { quoted: m });
-          log.info("Replied to .بنج");
-        }
-      } catch (err) {
-        log.error("Error handling message:", err);
-      }
-    });
-
-    // save creds on update
+    // حفظ بيانات الاعتماد عند التحديث
     sock.ev.on('creds.update', saveCreds);
 
-    // expose socket for later use if needed (not exported here)
-    log.info("Bot started and listening for events.");
-
     return sock;
-
-  } catch (err) {
-    log.error("Fatal startBot error:", err);
-    // attempt restart with backoff
-    restartAttempts++;
-    const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
-    log.info(`إعادة محاولة startBot بعد ${waitSec} ثانية`);
-    setTimeout(() => startBot().catch(e => log.error(e)), waitSec * 1000);
-  }
 }
 
-/**
- * Express simple health endpoint and info
- */
+// تشغيل السيرفر للحفاظ على البوت نشطاً في Koyeb
 app.get('/', (req, res) => {
-  res.send(`${SETTINGS.botName} active`);
+    res.send(`${SETTINGS.botName} is active and running!`);
 });
 
-app.listen(port, () => {
-  log.info(`HTTP server listening on port ${port}`);
-  startBot().catch(err => {
-    log.error("startBot initial error:", err);
-  });
+app.listen(SETTINGS.port, () => {
+    console.log(`🌍 Server listening on port ${SETTINGS.port}`);
+    // بدء تشغيل البوت
+    startBot().catch(err => console.error("Fatal Error starting bot:", err));
 });
 
-/**
- * Keep process alive on unhandled errors but log them (recommended to monitor)
- */
+// التعامل مع الأخطاء غير المتوقعة لمنع توقف البوت
 process.on('uncaughtException', (err) => {
-  log.error("Uncaught Exception (ignored):", err);
+    console.error("Uncaught Exception (ignored):", err);
 });
+
 process.on('unhandledRejection', (err) => {
-  log.error("Unhandled Rejection (ignored):", err);
+    console.error("Unhandled Rejection (ignored):", err);
 });
