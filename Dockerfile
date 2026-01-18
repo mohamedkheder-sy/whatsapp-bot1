@@ -1,6 +1,6 @@
 FROM node:18-bullseye
 
-# تثبيت المتطلبات الضرورية للنظام
+# تثبيت المتطلبات الضرورية للنظام (ffmpeg, imagemagick, webp)
 RUN apt-get update && \
   apt-get install -y \
   ffmpeg \
