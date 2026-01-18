@@ -3,107 +3,113 @@ const {
     useMultiFileAuthState,
     DisconnectReason,
     Browsers,
-    makeInMemoryStore
+    fetchLatestBaileysVersion
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs');
 const express = require('express');
 
-// إعدادات البوت والسيرفر
 const SETTINGS = {
     botName: 'WhatsApp Bot',
     port: process.env.PORT || 3000
 };
 
-// إعداد ملف الجلسة
 const AUTH_DIR = 'auth_info_baileys';
 const app = express();
-const log = pino({ level: 'silent' }); // اجعلها 'info' لرؤية تفاصيل أكثر
+const log = pino({ level: 'silent' });
 
 let restartAttempts = 0;
 
+// دالة لحذف الجلسة الفاسدة
+function clearSession() {
+    try {
+        if (fs.existsSync(AUTH_DIR)) {
+            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+            console.log("🗑️ تم حذف ملفات الجلسة القديمة لبدء اتصال نظيف.");
+        }
+    } catch (e) {
+        console.error("خطأ في حذف الجلسة:", e);
+    }
+}
+
 async function startBot() {
+    // جلب أحدث نسخة من واتساب ويب لتجنب مشاكل الاتصال
+    const { version } = await fetchLatestBaileysVersion();
+    console.log(`نسخة واتساب المستخدمة: v${version.join('.')}`);
+
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     const sock = makeWASocket({
+        version,
         logger: log,
-        printQRInTerminal: true, // طباعة الباركود في التيرمينال
+        printQRInTerminal: true, // ضروري لظهور الباركود
         auth: state,
-        browser: Browsers.macOS('Desktop'),
+        // استخدام متصفح Ubuntu ليكون أكثر توافقاً مع السيرفر
+        browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false
     });
 
-    // التعامل مع تحديثات الاتصال
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            console.log("⚠️ امسح الباركود بسرعة! (QR Code generated)");
+        }
 
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut);
-            
-            if (shouldReconnect) {
-                restartAttempts++;
-                // حساب وقت الانتظار بناءً على عدد المحاولات (لمنع التكرار السريع جداً)
-                const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
-                console.log(`❌ انقطع الاتصال. إعادة المحاولة بعد ${waitSec} ثانية...`);
-                
-                setTimeout(() => startBot().catch(e => console.error(e)), waitSec * 1000);
+            const reason = lastDisconnect.error?.output?.statusCode;
+            console.log(`❌ انقطع الاتصال. السبب: ${reason} | ${lastDisconnect.error}`);
+
+            if (reason === DisconnectReason.loggedOut) {
+                console.log("🔒 تم تسجيل الخروج. جاري حذف الجلسة...");
+                clearSession();
+                startBot();
+            } else if (reason === DisconnectReason.badSession) {
+                console.log("📂 ملف الجلسة معطوب. جاري الحذف وإعادة التشغيل...");
+                clearSession();
+                startBot();
             } else {
-                console.log("⚠️ تم تسجيل الخروج من الجهاز (Logged Out). يرجى مسح ملف الجلسة وإعادة مسح الباركود.");
-                try { 
-                    fs.rmSync(AUTH_DIR, { recursive: true, force: true }); 
-                } catch (e) {
-                    console.error("خطأ في حذف ملف الجلسة:", e);
-                }
-                // يمكن إيقاف العملية هنا أو إعادة التشغيل لانتظار مسح جديد
-                // process.exit(0); 
+                // إعادة المحاولة
+                restartAttempts++;
+                const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
+                console.log(`🔄 إعادة المحاولة بعد ${waitSec} ثانية...`);
+                setTimeout(startBot, waitSec * 1000);
             }
         } else if (connection === 'open') {
-            console.log('✅ تم الاتصال بـ WhatsApp بنجاح!');
-            restartAttempts = 0; // تصفير العداد عند النجاح
+            console.log('✅ تم الاتصال بـ WhatsApp بنجاح! 🚀');
+            restartAttempts = 0;
         }
     });
 
-    // التعامل مع الرسائل القادمة
     sock.ev.on('messages.upsert', async ({ messages }) => {
         try {
             const m = messages[0];
             if (!m.message || m.key.fromMe) return;
-
             const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
 
-            // طباعة الرسالة في السجل (اختياري)
-            // console.log(`📩 رسالة من ${m.key.remoteJid}: ${text}`);
-
             if (text === '.بنج') {
-                await sock.sendMessage(m.key.remoteJid, { text: '🚀 شغال 100%!' }, { quoted: m });
+                await sock.sendMessage(m.key.remoteJid, { text: '🚀 البوت شغال وسريع!' }, { quoted: m });
             }
         } catch (err) {
-            console.error("Error handling message:", err);
+            console.error("خطأ في قراءة الرسالة:", err);
         }
     });
 
-    // حفظ بيانات الاعتماد عند التحديث
     sock.ev.on('creds.update', saveCreds);
-
-    return sock;
 }
 
-// تشغيل السيرفر للحفاظ على البوت نشطاً في Koyeb
-app.get('/', (req, res) => {
-    res.send(`${SETTINGS.botName} is active and running!`);
-});
-
+// السيرفر
+app.get('/', (req, res) => res.send('Bot is Running'));
 app.listen(SETTINGS.port, () => {
-    console.log(`🌍 Server listening on port ${SETTINGS.port}`);
-    // بدء تشغيل البوت
-    startBot().catch(err => console.error("Fatal Error starting bot:", err));
+    console.log(`🌍 Server running on port ${SETTINGS.port}`);
+    
+    // في أول تشغيل، سنحذف الجلسة لضمان ظهور الباركود
+    // يمكنك إزالة هذا السطر لاحقاً إذا أردت الحفاظ على الاتصال عند إعادة التشغيل
+    if (restartAttempts === 0) clearSession();
+
+    startBot();
 });
 
-// التعامل مع الأخطاء غير المتوقعة لمنع توقف البوت
-process.on('uncaughtException', (err) => {
-    console.error("Uncaught Exception (ignored):", err);
-});
-
-process.on('unhandledRejection', (err) => {
-    console.error("Unhandled Rejection (ignored):", err);
-});
+// منع توقف البوت عند الأخطاء المفاجئة
+process.on('uncaughtException', (err) => console.error("Uncaught Exception:", err));
+process.on('unhandledRejection', (err) => console.error("Unhandled Rejection:", err));
