@@ -1,109 +1,142 @@
-global.crypto = require('crypto');
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    Browsers,
-    fetchLatestBaileysVersion,
-    delay
-} = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const fs = require('fs');
+/**
+ * بوت واتساب متكامل - إصدار مستقر
+ * تم إضافة ميزة المنشن الجماعي (.منشن / .الكل)
+ */
+
+const { 
+    default: makeWASocket, 
+    useMultiFileAuthState, 
+    DisconnectReason, 
+    makeCacheableSignalKeyStore,
+    delay,
+    fetchLatestBaileysVersion
+} = require("@whiskeysockets/baileys");
+const pino = require("pino");
 const express = require('express');
+const fs = require('fs');
+const crypto = require("crypto");
 
-// =========================================================================
-// رقمك المصري
-const myPhoneNumber = "201066706529"; 
-// =========================================================================
+global.crypto = crypto;
 
-const SETTINGS = {
-    botName: 'WhatsApp Bot',
-    port: process.env.PORT || 3000
+const app = express();
+const port = process.env.PORT || 8000; 
+
+// إعدادات البوت
+const settings = {
+    phoneNumber: "201066706529", // رقمك
+    ownerName: "Mohamed Kheder",
+    botName: "My Super Bot"
 };
 
-const AUTH_DIR = 'auth_info_baileys';
-const app = express();
-const log = pino({ level: 'silent' });
-
-// دالة لحذف الجلسة القديمة
-function clearSession() {
-    try {
-        if (fs.existsSync(AUTH_DIR)) {
-            fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-            console.log("🗑️ تم تنظيف الجلسة القديمة...");
-        }
-    } catch (e) {}
-}
-
 async function startBot() {
-    const { version } = await fetchLatestBaileysVersion();
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+    // جلب أحدث إصدار من المكتبة
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`🚀 Version: ${version.join('.')} | Latest: ${isLatest}`);
+
+    // إعداد حفظ الجلسة
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
 
     const sock = makeWASocket({
         version,
-        logger: log,
-        printQRInTerminal: false,
-        mobile: false, 
-        auth: state,
-        browser: Browsers.ubuntu('Chrome'),
-        syncFullHistory: false
+        logger: pino({ level: "silent" }), // تقليل الإزعاج في السجلات
+        printQRInTerminal: false, 
+        mobile: false,
+        browser: ["Windows", "Chrome", "110.0.5481.178"], 
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "silent" })),
+        },
+        connectTimeoutMs: 60000, 
+        keepAliveIntervalMs: 30000,
     });
 
-    // إذا لم يكن مسجلاً، اطلب الكود
+    // طلب كود الربط إذا لم يكن مسجلاً
     if (!sock.authState.creds.registered) {
-        
-        // انتظار 10 ثواني
-        console.log("⏳ انتظر 10 ثواني.. جهز هاتفك على شاشة إدخال الرقم...");
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(myPhoneNumber);
-                const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
-                
-                console.log("\n\n================================================");
-                console.log("📞 الكود الجديد هو:  👉  " + formattedCode + "  👈");
-                console.log("================================================\n");
-                
-            } catch (err) {
-                console.error("❌ فشل طلب الكود:", err);
-            }
-        }, 10000); 
+        console.log("⏳ Waiting 10 seconds for server stability...");
+        await delay(10000); 
+        try {
+            const code = await sock.requestPairingCode(settings.phoneNumber);
+            console.log(`\n========================================`);
+            console.log(`🔥 YOUR PAIRING CODE: ${code}`);
+            console.log(`📱 Link your phone using this code now!`);
+            console.log(`========================================\n`);
+        } catch (err) {
+            console.error('❌ Failed to get pairing code:', err.message);
+        }
     }
 
+    // إدارة الاتصال
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
-
+        
         if (connection === 'close') {
-            const reason = lastDisconnect.error?.output?.statusCode;
+            const reason = lastDisconnect?.error?.output?.statusCode;
+            console.log(`⚠️ Connection closed. Reason: ${reason}`);
+
             if (reason === DisconnectReason.loggedOut) {
-                clearSession();
+                console.log('❌ Logged out. Deleting session...');
+                fs.rmSync('./auth_info', { recursive: true, force: true });
                 startBot();
             } else {
-                startBot();
+                startBot(); 
             }
         } else if (connection === 'open') {
-            console.log('✅ تم الاتصال بـ WhatsApp بنجاح! 🚀');
+            console.log('✅ Connected successfully to WhatsApp!');
         }
     });
 
+    // معالج الرسائل
     sock.ev.on('messages.upsert', async ({ messages }) => {
         try {
             const m = messages[0];
             if (!m.message || m.key.fromMe) return;
+
             const text = (m.message.conversation || m.message.extendedTextMessage?.text || "").trim();
-            if (text === '.بنج') {
-                await sock.sendMessage(m.key.remoteJid, { text: '🚀 البوت يعمل!' }, { quoted: m });
+            const remoteJid = m.key.remoteJid;
+
+            // 1️⃣ أمر القائمة
+            if (text === '.اوامر' || text === '.menu') {
+                const menu = `🤖 *قائمة ${settings.botName}*\n\n1️⃣ .بنج\n2️⃣ .منشن (أو .الكل)\n3️⃣ .المطور\n\n👑 بواسطة: ${settings.ownerName}`;
+                await sock.sendMessage(remoteJid, { text: menu }, { quoted: m });
+            } 
+            // 2️⃣ أمر بنج
+            else if (text === '.بنج') {
+                await sock.sendMessage(remoteJid, { text: '🚀 البوت يعمل بسرعة الصاروخ!' }, { quoted: m });
             }
-        } catch (err) {}
+            // 3️⃣ أمر المنشن الجماعي (الجديد)
+            else if (text === '.منشن' || text === '.الكل') {
+                // التأكد أن الأمر داخل مجموعة
+                if (remoteJid.endsWith('@g.us')) {
+                    const groupMetadata = await sock.groupMetadata(remoteJid);
+                    const participants = groupMetadata.participants.map(p => p.id);
+                    
+                    const mentionText = '📣 *منشن جماعي للكل* 📣\n\n' + 
+                                      participants.map(p => `@${p.split('@')[0]}`).join(' ');
+
+                    await sock.sendMessage(remoteJid, {
+                        text: mentionText,
+                        mentions: participants
+                    }, { quoted: m });
+                } else {
+                    await sock.sendMessage(remoteJid, { text: '⚠️ هذا الأمر يعمل فقط داخل المجموعات!' }, { quoted: m });
+                }
+            }
+
+        } catch (err) {
+            console.error("Error processing message:", err);
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);
 }
 
-app.get('/', (req, res) => res.send('Bot is Running'));
+// حماية السيرفر
+process.on('uncaughtException', (err) => console.error("Uncaught Exception:", err));
+process.on('unhandledRejection', (err) => console.error("Unhandled Rejection:", err));
 
-app.listen(SETTINGS.port, () => {
-    console.log(`🌍 Server running on port ${SETTINGS.port}`);
-    // تنظيف الجلسة عند البداية فقط إذا لم نكن متصلين
-    if (!fs.existsSync(AUTH_DIR)) clearSession();
+// تشغيل السيرفر
+app.get('/', (req, res) => res.send(`Bot is Running ✅`));
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
     startBot();
 });
