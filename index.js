@@ -47,7 +47,6 @@ async function startBot() {
         logger: log,
         printQRInTerminal: true, // ضروري لظهور الباركود
         auth: state,
-        // استخدام متصفح Ubuntu لضمان التوافق
         browser: Browsers.ubuntu('Chrome'),
         syncFullHistory: false
     });
@@ -72,7 +71,6 @@ async function startBot() {
                 clearSession();
                 startBot();
             } else {
-                // إعادة المحاولة
                 restartAttempts++;
                 const waitSec = Math.min(60, 2 ** Math.min(restartAttempts, 6));
                 console.log(`🔄 إعادة المحاولة بعد ${waitSec} ثانية...`);
@@ -106,15 +104,10 @@ app.get('/', (req, res) => res.send('Bot is Running'));
 app.listen(SETTINGS.port, () => {
     console.log(`🌍 Server running on port ${SETTINGS.port}`);
     
-    // في أول تشغيل، سنحذف الجلسة لضمان ظهور الباركود
+    // حذف الجلسة عند أول تشغيل لضمان ظهور الباركود
     if (restartAttempts === 0) clearSession();
 
     startBot();
-});
-
-// منع توقف البوت عند الأخطاء المفاجئة
-process.on('uncaughtException', (err) => console.error("Uncaught Exception:", err));
-process.on('unhandledRejection', (err) => console.error("Unhandled Rejection:", err));
 });
 
 // منع توقف البوت عند الأخطاء المفاجئة
